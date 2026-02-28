@@ -2,6 +2,19 @@
 
 Home Assistant custom integration for **Inside The Box** (api.insidethebox.se).
 
+## ⚠️ Experimental / Pre-release
+
+This integration is **experimental** and may change without notice.
+- Webhook behavior and entity mapping may change
+- Backwards compatibility is not guaranteed
+- Use at your own risk
+
+### What’s included
+- UI setup (token in config flow)
+- Webhook-first updates with polling fallback
+- Lock entities + basic sensors
+- Service: `insidethebox.reregister_webhooks`
+
 ## Features
 
 - Configured via UI (Config Flow): enter API token
@@ -57,20 +70,3 @@ Each lock is exposed as a `lock` entity.
 - Gateway:
   - Connection status
   - Connection changed timestamp
-
-## Automations (webhook event)
-
-Example: notify on “You Got Mail” events:
-
-```yaml
-alias: ITB - You Got Mail
-trigger:
-  - platform: event
-    event_type: insidethebox_webhook
-condition:
-  - condition: template
-    value_template: "{{ trigger.event.data.eventType == 'YGM' }}"
-action:
-  - service: notify.notify
-    data:
-      message: "You got mail (Inside The Box)."
