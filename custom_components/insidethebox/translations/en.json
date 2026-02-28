@@ -1,0 +1,17 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Inside The Box",
+        "description": "Enter your Inside The Box API token (from the mobile app).",
+        "data": {
+          "token": "API token"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid token.",
+      "cannot_connect": "Could not connect to the API."
+    }
+  }
+}
