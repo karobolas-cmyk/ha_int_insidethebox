@@ -31,11 +31,17 @@ class InsideTheBoxConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "invalid_auth"
             except InsideTheBoxApiError:
                 errors["base"] = "cannot_connect"
+            except Exception as e:
+                # NEW — show real error in log
+                import logging
+                logging.getLogger(__name__).exception("Unexpected error validating token")
+                errors["base"] = "cannot_connect"
             else:
                 return self.async_create_entry(
                     title="Inside The Box",
                     data={CONF_TOKEN: token},
                 )
+
 
         schema = vol.Schema({vol.Required(CONF_TOKEN): str})
         return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
