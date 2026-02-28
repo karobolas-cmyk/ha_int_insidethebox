@@ -1,0 +1,12 @@
+{
+  "domain": "insidethebox",
+  "name": "Inside The Box",
+  "config_flow": true,
+  "documentation": "https://api.insidethebox.se/iotapi_doc/",
+  "issue_tracker": "https://github.com/karobolas-cmyk/insidethebox-ha/issues",
+  "integration_type": "device",
+  "iot_class": "cloud_push",
+  "requirements": [],
+  "version": "0.2.0",
+  "loggers": ["custom_components.insidethebox"]
+}

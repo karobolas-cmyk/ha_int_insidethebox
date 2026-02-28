@@ -1,0 +1,3 @@
+reregister_webhooks:
+  name: Re-register webhooks
+  description: Deletes known remote webhooks and registers new ones for all locks.
