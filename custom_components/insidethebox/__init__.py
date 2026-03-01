@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 import secrets
 from typing import Any
 from urllib.parse import urlparse
+
+from aiohttp import web
 
 from homeassistant.components.webhook import (
     async_generate_id as webhook_generate_id,
@@ -11,7 +14,9 @@ from homeassistant.components.webhook import (
     async_unregister as webhook_unregister,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall
+
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import InsideTheBoxClient
 from .const import (
@@ -21,19 +26,18 @@ from .const import (
     CONF_WEBHOOK_SECRET,
     DEFAULT_OPEN_DURATION,
     DOMAIN,
+    SERVICE_REREGISTER_WEBHOOKS,
     WEBHOOK_EVENT_NAME,
     WEBHOOK_HEADER_NAME,
 )
 from .coordinator import InsideTheBoxCoordinator
 
+_LOGGER = logging.getLogger(__name__)
+
 PLATFORMS = ["lock", "sensor"]
 
 
 def _parse_for_itb(webhook_url: str) -> dict[str, Any]:
-    """
-    Convert full webhook URL to ITB fields:
-      endpointHost, endpointPort, endpointPath, endpointQuerystring, useHttps
-    """
     u = urlparse(webhook_url)
     use_https = (u.scheme == "https")
     port = u.port or (443 if use_https else 80)
@@ -69,18 +73,17 @@ async def _ensure_webhook_ids(hass: HomeAssistant, entry: ConfigEntry) -> tuple[
 
 def _make_webhook_handler(hass: HomeAssistant, entry_id: str):
     async def _handler(hass: HomeAssistant, webhook_id: str, request):
-        # Validate shared secret header
         secret_expected = hass.data[DOMAIN][entry_id]["webhook_secret"]
         got = request.headers.get(WEBHOOK_HEADER_NAME, "")
         if not got or got != secret_expected:
-            return {"status": 401, "body": "unauthorized"}
+            return web.Response(status=401, text="unauthorized")
 
         payload = await request.json()
 
         # Fire HA event for automations
         hass.bus.async_fire(WEBHOOK_EVENT_NAME, payload)
 
-        # Update coordinator data opportunistically (push state)
+        # Push-update coordinator data (best-effort)
         coordinator: InsideTheBoxCoordinator = hass.data[DOMAIN][entry_id]["coordinator"]
 
         lock_obj = (
@@ -104,7 +107,7 @@ def _make_webhook_handler(hass: HomeAssistant, entry_id: str):
 
             coordinator.async_set_updated_data({**data, "locks": locks})
 
-        return {"status": 200}
+        return web.Response(status=200)
 
     return _handler
 
@@ -117,7 +120,6 @@ async def _register_itb_webhooks_for_all_locks(hass: HomeAssistant, entry: Confi
     secret: str = ctx["webhook_secret"]
     webhook_id: str = ctx["webhook_id"]
 
-    # Dynamic URL based on HA external URL config
     full_url = webhook_generate_url(hass, webhook_id)
     itb_target = _parse_for_itb(full_url)
 
@@ -129,7 +131,6 @@ async def _register_itb_webhooks_for_all_locks(hass: HomeAssistant, entry: Confi
         if not lockid:
             continue
 
-        # Register (201 may not return id; list afterwards and match)
         await client.register_webhook_for_lock(
             lockid,
             endpoint_host=itb_target["endpointHost"],
@@ -162,7 +163,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})
 
     token = entry.data[CONF_TOKEN]
-    session = hass.helpers.aiohttp_client.async_get_clientsession(hass)
+    session = async_get_clientsession(hass)
     client = InsideTheBoxClient(session, token, API_BASE)
 
     coordinator = InsideTheBoxCoordinator(hass, client)
@@ -189,33 +190,43 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         allowed_methods=["POST"],
     )
 
-    # Register ITB webhooks for each lock
-    # If HA external URL is not configured, webhook_generate_url may be wrong.
-    # In that case polling still works; webhook setup may raise.
+    # Register ITB webhooks for each lock (best-effort)
     try:
         remote_map = await _register_itb_webhooks_for_all_locks(hass, entry)
         hass.data[DOMAIN][entry.entry_id]["remote_webhooks"] = remote_map
+        _LOGGER.info("Registered ITB webhooks for %s locks", len(remote_map))
     except Exception:
-        # Keep integration running with polling fallback
-        pass
+        _LOGGER.exception("Failed to register ITB webhooks (polling fallback will still work)")
 
-    # Services
-    async def _svc_reregister(call):
-        # Remove remote hooks we know about
-        remote = hass.data[DOMAIN][entry.entry_id].get("remote_webhooks", {})
-        for webhookid in list(remote.values()):
-            if webhookid:
+    # Register service once per domain
+    if not hass.services.has_service(DOMAIN, SERVICE_REREGISTER_WEBHOOKS):
+
+        async def _svc_reregister(call: ServiceCall):
+            # Re-register for ALL current entries
+            for entry_id, ctx in list(hass.data.get(DOMAIN, {}).items()):
+                _client: InsideTheBoxClient = ctx["client"]
+                _coordinator: InsideTheBoxCoordinator = ctx["coordinator"]
+                _entry = hass.config_entries.async_get_entry(entry_id)
+                if _entry is None:
+                    continue
+
+                remote = ctx.get("remote_webhooks", {}) or {}
+                for webhookid in list(remote.values()):
+                    if webhookid:
+                        try:
+                            await _client.delete_webhook(webhookid, trigger_webhook=False)
+                        except Exception:
+                            pass
+
+                await _coordinator.async_request_refresh()
                 try:
-                    await client.delete_webhook(webhookid, trigger_webhook=False)
+                    remote_map2 = await _register_itb_webhooks_for_all_locks(hass, _entry)
+                    ctx["remote_webhooks"] = remote_map2
+                    _LOGGER.info("Re-registered ITB webhooks for entry %s (%s locks)", entry_id, len(remote_map2))
                 except Exception:
-                    pass
+                    _LOGGER.exception("Failed to re-register webhooks for entry %s", entry_id)
 
-        # Refresh device list, then register again
-        await coordinator.async_request_refresh()
-        remote_map2 = await _register_itb_webhooks_for_all_locks(hass, entry)
-        hass.data[DOMAIN][entry.entry_id]["remote_webhooks"] = remote_map2
-
-    hass.services.async_register(DOMAIN, "reregister_webhooks", _svc_reregister)
+        hass.services.async_register(DOMAIN, SERVICE_REREGISTER_WEBHOOKS, _svc_reregister)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
@@ -224,9 +235,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     data = hass.data[DOMAIN].get(entry.entry_id, {})
     client: InsideTheBoxClient | None = data.get("client")
-    remote_map: dict[str, str] = data.get("remote_webhooks", {})
+    remote_map: dict[str, str] = data.get("remote_webhooks", {}) or {}
 
-    # Remove ITB webhooks
+    # Remove ITB webhooks for this entry (best-effort)
     if client and remote_map:
         for webhookid in remote_map.values():
             if webhookid:
@@ -240,12 +251,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if webhook_id:
         webhook_unregister(hass, webhook_id)
 
-    # Unregister service
-    if hass.services.has_service(DOMAIN, "reregister_webhooks"):
-        hass.services.async_remove(DOMAIN, "reregister_webhooks")
-
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id, None)
+
+        # If last entry removed, also remove service
+        if not hass.data[DOMAIN] and hass.services.has_service(DOMAIN, SERVICE_REREGISTER_WEBHOOKS):
+            hass.services.async_remove(DOMAIN, SERVICE_REREGISTER_WEBHOOKS)
 
     return unload_ok
