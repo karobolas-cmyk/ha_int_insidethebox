@@ -20,7 +20,7 @@ async def _validate(hass: HomeAssistant, token: str) -> None:
     await client.get_devices()
 
 
-class InsideTheBoxConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
     async def async_step_user(self, user_input=None) -> FlowResult:
@@ -30,7 +30,7 @@ class InsideTheBoxConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             token = user_input[CONF_TOKEN].strip()
 
             try:
-                _LOGGER.debug("Validating Inside The Box token via /devices")
+                _LOGGER.debug("Validating token via /devices")
                 await _validate(self.hass, token)
             except InsideTheBoxAuthError:
                 errors["base"] = "invalid_auth"
@@ -40,13 +40,12 @@ class InsideTheBoxConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _LOGGER.exception("Unexpected error validating token")
                 errors["base"] = "cannot_connect"
             else:
-                await self.async_set_unique_id("insidethebox")
+                await self.async_set_unique_id(DOMAIN)
                 self._abort_if_unique_id_configured()
+                return self.async_create_entry(title="Inside The Box", data={CONF_TOKEN: token})
 
-                return self.async_create_entry(
-                    title="Inside The Box",
-                    data={CONF_TOKEN: token},
-                )
-
-        schema = vol.Schema({vol.Required(CONF_TOKEN): str})
-        return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
+        return self.async_show_form(
+            step_id="user",
+            data_schema=vol.Schema({vol.Required(CONF_TOKEN): str}),
+            errors=errors,
+        )

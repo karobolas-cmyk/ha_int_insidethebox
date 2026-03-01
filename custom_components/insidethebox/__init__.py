@@ -15,7 +15,6 @@ from homeassistant.components.webhook import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
-
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import InsideTheBoxClient
@@ -44,6 +43,7 @@ def _parse_for_itb(webhook_url: str) -> dict[str, Any]:
     host = u.hostname
     if not host:
         raise ValueError("Webhook URL missing hostname")
+
     return {
         "endpointHost": host,
         "endpointPort": int(port),
