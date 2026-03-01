@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -10,6 +11,8 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import InsideTheBoxCoordinator
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -26,9 +29,21 @@ LOCK_SENSORS: list[ITBSensorEntityDescription] = [
     ),
     ITBSensorEntityDescription(
         key="lockAccessibilityState",
-        name="Accessibility",
+        name="Accessibility state",
         icon="mdi:shield-lock",
         value_fn=lambda o: o.get("lockAccessibilityState"),
+    ),
+    ITBSensorEntityDescription(
+        key="state",
+        name="State",
+        icon="mdi:information-outline",
+        value_fn=lambda o: o.get("state"),
+    ),
+    ITBSensorEntityDescription(
+        key="lastLockOpenOrCloseTimestamp",
+        name="Last open/close",
+        icon="mdi:clock-outline",
+        value_fn=lambda o: o.get("lastLockOpenOrCloseTimestamp"),
     ),
 ]
 
@@ -45,6 +60,12 @@ GATEWAY_SENSORS: list[ITBSensorEntityDescription] = [
         icon="mdi:clock-outline",
         value_fn=lambda o: o.get("gatewayConnectionChangedTimestamp"),
     ),
+    ITBSensorEntityDescription(
+        key="state",
+        name="State",
+        icon="mdi:information-outline",
+        value_fn=lambda o: o.get("state"),
+    ),
 ]
 
 
@@ -52,16 +73,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     ctx = hass.data[DOMAIN][entry.entry_id]
     coordinator: InsideTheBoxCoordinator = ctx["coordinator"]
 
+    locks = (coordinator.data or {}).get("locks", [])
+    gateways = (coordinator.data or {}).get("gateways", [])
+
+    _LOGGER.info("Creating sensors: %s locks, %s gateways", len(locks), len(gateways))
+
     entities: list[SensorEntity] = []
 
-    for lock_obj in (coordinator.data or {}).get("locks", []):
+    for lock_obj in locks:
         lockid = lock_obj.get("lockid")
+        if not lockid:
+            continue
         name = lock_obj.get("name") or lock_obj.get("description") or lockid
         for desc in LOCK_SENSORS:
             entities.append(InsideTheBoxLockSensor(coordinator, lockid, name, desc))
 
-    for gw_obj in (coordinator.data or {}).get("gateways", []):
+    for gw_obj in gateways:
         gid = gw_obj.get("gatewayid")
+        if not gid:
+            continue
         name = gw_obj.get("name") or gw_obj.get("description") or gid
         for desc in GATEWAY_SENSORS:
             entities.append(InsideTheBoxGatewaySensor(coordinator, gid, name, desc))
