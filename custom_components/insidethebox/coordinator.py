@@ -11,7 +11,12 @@ from .const import DOMAIN, DEFAULT_SCAN_INTERVAL
 
 
 class InsideTheBoxCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    def __init__(self, hass: HomeAssistant, client: InsideTheBoxClient, scan_interval_s: int = DEFAULT_SCAN_INTERVAL) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        client: InsideTheBoxClient,
+        scan_interval_s: int = DEFAULT_SCAN_INTERVAL,
+    ) -> None:
         super().__init__(
             hass,
             logger=__import__("logging").getLogger(__name__),
@@ -22,6 +27,11 @@ class InsideTheBoxCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _async_update_data(self) -> dict[str, Any]:
         try:
-            return await self.client.get_devices()
+            data = await self.client.get_devices()
         except InsideTheBoxApiError as e:
             raise UpdateFailed(str(e)) from e
+
+        # Normalize null -> []
+        data["locks"] = data.get("locks") or []
+        data["gateways"] = data.get("gateways") or []
+        return data

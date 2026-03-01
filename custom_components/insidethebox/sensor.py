@@ -25,7 +25,8 @@ LOCK_SENSORS: list[ITBSensorEntityDescription] = [
         key="lockBatteryLevel",
         name="Battery level",
         icon="mdi:battery",
-        value_fn=lambda o: o.get("lockBatteryLevel"),
+        native_unit_of_measurement="%",
+        value_fn=lambda o: int(o["lockBatteryLevel"]) if o.get("lockBatteryLevel") is not None else None,
     ),
     ITBSensorEntityDescription(
         key="lockAccessibilityState",
@@ -69,14 +70,17 @@ GATEWAY_SENSORS: list[ITBSensorEntityDescription] = [
 ]
 
 
+import logging
+_LOGGER = logging.getLogger(__name__)
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities) -> None:
     ctx = hass.data[DOMAIN][entry.entry_id]
     coordinator: InsideTheBoxCoordinator = ctx["coordinator"]
 
-    locks = (coordinator.data or {}).get("locks", [])
-    gateways = (coordinator.data or {}).get("gateways", [])
+    locks = (coordinator.data or {}).get("locks") or []
+    gateways = (coordinator.data or {}).get("gateways") or []
 
-    _LOGGER.info("Creating sensors: %s locks, %s gateways", len(locks), len(gateways))
+    _LOGGER.warning("ITB sensor setup: %s locks, %s gateways", len(locks), len(gateways))
 
     entities: list[SensorEntity] = []
 
@@ -96,6 +100,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         for desc in GATEWAY_SENSORS:
             entities.append(InsideTheBoxGatewaySensor(coordinator, gid, name, desc))
 
+    _LOGGER.warning("ITB sensor setup: adding %s sensor entities", len(entities))
     async_add_entities(entities)
 
 
