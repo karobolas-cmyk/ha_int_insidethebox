@@ -48,6 +48,10 @@ class InsideTheBoxClient:
                     text = await resp.text()
                     raise InsideTheBoxAuthError(f"Auth error {resp.status}: {text}")
 
+                if resp.status == 422:
+                    text = await resp.text()
+                    raise InsideTheBoxApiError(f"HTTP 422 Unprocessable Entity: {text}")
+
                 if resp.status >= 400:
                     text = await resp.text()
                     raise InsideTheBoxApiError(f"HTTP {resp.status}: {text}")

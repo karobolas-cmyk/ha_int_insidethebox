@@ -33,7 +33,7 @@ from .coordinator import InsideTheBoxCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["lock", "sensor"]
+PLATFORMS = ["lock", "sensor", "binary_sensor"]
 
 
 def _parse_for_itb(webhook_url: str) -> dict[str, Any]:
