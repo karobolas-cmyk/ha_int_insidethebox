@@ -57,8 +57,11 @@ class InsideTheBoxLock(CoordinatorEntity[InsideTheBoxCoordinator], LockEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         obj = self._find_self() or {}
+
         return {
             "lockid": self._lockid,
+            "description": obj.get("description"),
+            "deviceType": obj.get("deviceType"),
             "state": obj.get("state"),
             "lockAccessibilityState": obj.get("lockAccessibilityState"),
             "lastLockOpenOrCloseTimestamp": obj.get("lastLockOpenOrCloseTimestamp"),
