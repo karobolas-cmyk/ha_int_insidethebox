@@ -3,10 +3,11 @@ from __future__ import annotations
 import logging
 import secrets
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 from aiohttp import web
 
+from homeassistant.components import cloud
 from homeassistant.components.webhook import (
     async_generate_id as webhook_generate_id,
     async_generate_url as webhook_generate_url,
@@ -74,8 +75,8 @@ async def _ensure_webhook_ids(hass: HomeAssistant, entry: ConfigEntry) -> tuple[
 def _make_webhook_handler(hass: HomeAssistant, entry_id: str):
     async def _handler(hass: HomeAssistant, webhook_id: str, request):
         secret_expected = hass.data[DOMAIN][entry_id]["webhook_secret"]
-        got = request.headers.get(WEBHOOK_HEADER_NAME, "")
-        if not got or got != secret_expected:
+        got = request.headers.get(WEBHOOK_HEADER_NAME, "") or request.query.get("itb_secret", "")
+        if not got or not secrets.compare_digest(got, secret_expected):
             return web.Response(status=401, text="unauthorized")
 
         payload = await request.json()
@@ -120,8 +121,17 @@ async def _register_itb_webhooks_for_all_locks(hass: HomeAssistant, entry: Confi
     secret: str = ctx["webhook_secret"]
     webhook_id: str = ctx["webhook_id"]
 
-    full_url = webhook_generate_url(hass, webhook_id)
+    if cloud.async_is_logged_in(hass):
+        full_url = await cloud.async_get_or_create_cloudhook(hass, webhook_id)
+    else:
+        full_url = webhook_generate_url(hass, webhook_id)
     itb_target = _parse_for_itb(full_url)
+    if not itb_target["useHttps"]:
+        raise ValueError("An HTTPS webhook URL is required to protect the shared secret")
+    # The API rejects customHeaders; validate the same secret via the HTTPS query.
+    query = urlencode({"itb_secret": secret})
+    existing_query = itb_target["endpointQuerystring"]
+    itb_target["endpointQuerystring"] = f"{existing_query}&{query}" if existing_query else query
 
     locks = (coordinator.data or {}).get("locks", [])
     remote_map: dict[str, str] = {}
@@ -131,6 +141,17 @@ async def _register_itb_webhooks_for_all_locks(hass: HomeAssistant, entry: Confi
         if not lockid:
             continue
 
+        # Reuse the destination so restarts do not duplicate mail events.
+        hooks = await client.list_webhooks_for_lock(lockid)
+        existing = next(
+            (h for h in hooks if h.get("webhookid")
+             and all(h.get(key) == value for key, value in itb_target.items())),
+            None,
+        )
+        if existing:
+            remote_map[lockid] = existing["webhookid"]
+            continue
+
         await client.register_webhook_for_lock(
             lockid,
             endpoint_host=itb_target["endpointHost"],
@@ -138,7 +159,6 @@ async def _register_itb_webhooks_for_all_locks(hass: HomeAssistant, entry: Confi
             endpoint_path=itb_target["endpointPath"],
             endpoint_querystring=itb_target["endpointQuerystring"],
             use_https=itb_target["useHttps"],
-            custom_headers={WEBHOOK_HEADER_NAME: secret},
             trigger_webhook=False,
         )
 
@@ -150,7 +170,6 @@ async def _register_itb_webhooks_for_all_locks(hass: HomeAssistant, entry: Confi
                 and h.get("endpointPath") == itb_target["endpointPath"]
                 and (h.get("endpointQuerystring") or "") == (itb_target["endpointQuerystring"] or "")
                 and bool(h.get("useHttps")) == bool(itb_target["useHttps"])
-                and (h.get("customHeaders") or {}).get(WEBHOOK_HEADER_NAME) == secret
             ):
                 if h.get("webhookid"):
                     remote_map[lockid] = h["webhookid"]
@@ -197,6 +216,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.info("Registered ITB webhooks for %s locks", len(remote_map))
     except Exception:
         _LOGGER.exception("Failed to register ITB webhooks (polling fallback will still work)")
+
+    async def _cloud_connected(state: cloud.CloudConnectionState) -> None:
+        """Register the existing webhook when the cloud connection becomes ready."""
+        if state != cloud.CloudConnectionState.CLOUD_CONNECTED:
+            return
+        ctx = hass.data[DOMAIN].get(entry.entry_id)
+        if ctx is None or ctx["remote_webhooks"]:
+            return
+        try:
+            ctx["remote_webhooks"] = await _register_itb_webhooks_for_all_locks(hass, entry)
+        except Exception:
+            _LOGGER.exception("Failed to register ITB cloud webhook")
+
+    entry.async_on_unload(cloud.async_listen_connection_change(hass, _cloud_connected))
 
     # Register service once per domain
     if not hass.services.has_service(DOMAIN, SERVICE_REREGISTER_WEBHOOKS):

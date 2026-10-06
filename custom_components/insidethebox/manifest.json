@@ -7,6 +7,6 @@
   "integration_type": "device",
   "iot_class": "cloud_push",
   "requirements": [],
-  "version": "0.2.0",
+  "version": "0.2.9",
   "loggers": ["custom_components.insidethebox"]
 }
