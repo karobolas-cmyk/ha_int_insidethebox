@@ -58,9 +58,8 @@ If the gateway is missing or offline, the API will return: HTTP 422 Unprocessabl
 
 - Home Assistant 2026.2.0 or newer
 - Inside The Box API token
-- External URL configured in Home Assistant
-  - Settings → System → Network → External URL
-- Reverse proxy must forward headers (required for webhook security)
+- An active Home Assistant Cloud (Nabu Casa) connection, or an externally reachable HTTPS URL configured in Home Assistant
+  - Settings → System → Network → External URL (for installations without Nabu Casa)
 
 ---
 
@@ -83,6 +82,37 @@ If the gateway is missing or offline, the API will return: HTTP 422 Unprocessabl
 ---
 
 ## 🔄 Webhook Notes
+
+When Home Assistant Cloud is available, the integration uses a Nabu Casa cloudhook. No inbound port forwarding or external URL setting is required for that route. If the cloud connects after integration startup, registration is retried when it connects.
+
+Webhook registrations are reused when their destination and secret match, avoiding duplicate notifications after restarts. Incoming requests still require the shared secret. New registrations send it in the HTTPS query string because the API returned HTTP 500 when `customHeaders` was included; existing header-based callers remain supported. Treat the complete webhook URL as a credential and avoid sharing or logging it.
+
+### Last mail timestamp for automations
+
+`YGM` (You Got Mail) arrives as an `insidethebox_webhook` event with `eventType: YGM`. Opening the lock is a separate operation and should not be used as proof that mail was delivered.
+
+Add the following item to your existing `template:` configuration, replacing `YOUR_LOCK_ID` with the lock ID returned by the API. The trigger-based timestamp is restored across restarts and remains unknown until the first matching mail event. It records the time Home Assistant received the event; past deliveries are not recovered by polling.
+
+```yaml
+template:
+  - triggers:
+      - trigger: event
+        event_type: insidethebox_webhook
+        event_data:
+          eventType: YGM
+    conditions:
+      - condition: template
+        value_template: "{{ trigger.event.data.get('lock', {}).get('lockid') == 'YOUR_LOCK_ID' }}"
+    sensor:
+      - name: "Mailbox last mail"
+        unique_id: insidethebox_last_mail
+        device_class: timestamp
+        icon: mdi:mailbox
+        state: "{{ trigger.event.time_fired.isoformat() }}"
+```
+
+Use changes to this timestamp sensor as the trigger for your mail automations.
+
 
 If your external URL changes, run: insidethebox.reregister_webhooks
 
